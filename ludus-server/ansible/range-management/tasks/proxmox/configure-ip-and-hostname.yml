@@ -85,15 +85,27 @@
 ## Windows ##
 #############
 # Static IP - Windows
-- name: Set up static IP address (Windows)
-  # Windows sometimes screws up and sets a static IP but thinks it still needs DHCP. Kicking the adapter fixes it
-  ansible.windows.win_shell: |
-    $eAdapter = Get-NetIpAddress -InterfaceAlias 'Ethernet*'
-    $eAdapter | New-NetIpAddress -IpAddress {{ static_ip }} -PrefixLength {{ cidr_netmask }} -DefaultGateway {{ default_gateway }}
-    Disable-NetAdapter -Name $eAdapter -Confirm: $false
-    Enable-NetAdapter -Name $eAdapter -Confirm: $false
-  async: 100 # Using "fire-and-forget" asynchronous execution for this task, otherwise it will always fail and time out
-  poll: 0
+- name: Create file with ip changes with netsh.exe
+  community.windows.win_lineinfile:
+    path: C:\static-ip.ps1
+    create: true
+    line: |
+      sleep 60
+      ipconfig /renew
+      netsh.exe interface ipv4 set address name=Ethernet source=static addr={{ static_ip }}/{{ cidr_netmask }} gateway={{ default_gateway }}
+      ipconfig /renew
+  when: ansible_os_family == "Windows"
+
+- name: Set registry key for script execution on next reboot
+  ansible.windows.win_regedit:
+    path: HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce
+    name: RunMyScript
+    data: 'powershell.exe -ExecutionPolicy Unrestricted -File C:\static-ip.ps1'
+    type: string
+  when: ansible_os_family == "Windows"
+
+- name: Reboot a machine that takes time to settle after being booted
+  ansible.windows.win_reboot:
   when: ansible_os_family == "Windows"
 
 - name: Change ansible's ip address for the host (Windows)
@@ -112,12 +124,12 @@
   register: wait_result
   when: ansible_os_family == "Windows"
 
-- name: Set DNS (Windows)
-  ansible.windows.win_dns_client:
-    adapter_names: '*'
-    dns_servers:
-      - "{{ dns_server }}"
-  when: ansible_os_family == "Windows" and dns_server is defined
+- name: Remove a file, cleanup
+  ansible.windows.win_file:
+    path: c:\static-ip.ps1
+    state: absent
+  when: ansible_os_family == "Windows"
+
 
 - name: Set DNS search domain (Windows)
   ansible.windows.win_powershell:
